@@ -23,6 +23,7 @@ import LeaveClassroomModal from "@/components/LeaveClassroomModal";
 import EditClassModal from "@/components/EditClassModal";
 import AssignBooksModal from "@/components/AssignBooksModal";
 import PdfReaderModal from "@/components/PdfReaderModal";
+import RequestQuizAccessModal from "@/components/RequestQuizAccessModal";
 import { useLanguage } from "@/lib/i18n";
 import {
   ArrowLeft,
@@ -194,6 +195,8 @@ export default function ClassroomHub() {
   const [takingQuiz, setTakingQuiz] = useState<any | null>(null);
   const [quizModalMode, setQuizModalMode] = useState<"TAKE" | "REVIEW">("TAKE");
   const [selectedQuizSubmissions, setSelectedQuizSubmissions] = useState<any | null>(null);
+  const [isRequestQuizOpen, setIsRequestQuizOpen] = useState(false);
+  const [studentQuizStatus, setStudentQuizStatus] = useState<any | null>(null);
 
   // Announcement edit/delete state
   const [editingAnnouncement, setEditingAnnouncement] = useState<any | null>(null);
@@ -243,6 +246,8 @@ export default function ClassroomHub() {
   useEffect(() => {
     fetchQuizzes();
   }, [fetchQuizzes]);
+
+
 
   const handleDeleteQuiz = async (quizId: string) => {
     if (!confirm("Are you sure you want to permanently delete this quiz?")) return;
@@ -416,6 +421,24 @@ export default function ClassroomHub() {
     classroom && currentUser && (classroom.teacherId === currentUser.id)
   );
   const isTeacher = isClassInstructor;
+
+  const fetchStudentQuizStatus = useCallback(async () => {
+    if (!currentUser || isTeacher) return;
+    try {
+      const res = await fetch("/api/quiz-requests", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setStudentQuizStatus(data);
+      }
+    } catch (err) {
+      console.error("Error fetching student quiz status:", err);
+    }
+  }, [currentUser, isTeacher]);
+
+  useEffect(() => {
+    fetchStudentQuizStatus();
+  }, [fetchStudentQuizStatus]);
+
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1183,7 +1206,7 @@ export default function ClassroomHub() {
                 </p>
               </div>
 
-              {isTeacher && (
+              {isTeacher ? (
                 <button
                   onClick={() => setIsCreateQuizOpen(true)}
                   className="inline-flex items-center gap-2 rounded-2xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 transition-all active:scale-95"
@@ -1191,6 +1214,41 @@ export default function ClassroomHub() {
                   <Plus className="h-4 w-4" />
                   <span>Create Quiz</span>
                 </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  {(currentUser?.canGenerateQuiz || studentQuizStatus?.canGenerateQuiz) ? (
+                    <button
+                      type="button"
+                      onClick={() => setIsCreateQuizOpen(true)}
+                      className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 transition-all active:scale-95"
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      <span>{language === "bn" ? "অনুশীলনী কুইজ তৈরি করুন" : "Generate Practice Quiz"}</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setIsRequestQuizOpen(true)}
+                      className={`inline-flex items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-xs font-bold transition-all active:scale-95 ${
+                        studentQuizStatus?.latestRequest?.status === "PENDING"
+                          ? "bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200"
+                          : "bg-white dark:bg-slate-900 border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 shadow-sm"
+                      }`}
+                    >
+                      {studentQuizStatus?.latestRequest?.status === "PENDING" ? (
+                        <>
+                          <Clock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                          <span>{language === "bn" ? "কুইজ আবেদন প্রক্রিয়াধীন" : "Quiz Request Pending"}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                          <span>{language === "bn" ? "কুইজ তৈরির অনুমতি চান" : "Request Quiz Access"}</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 
@@ -1206,6 +1264,8 @@ export default function ClassroomHub() {
                   <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
                     {isTeacher
                       ? "Create your first quiz with custom questions or generate curriculum-aligned MCQs using Gemini AI."
+                      : (currentUser?.canGenerateQuiz || studentQuizStatus?.canGenerateQuiz)
+                      ? "No quizzes published yet. You can click 'Generate Practice Quiz' above to generate and take your own test!"
                       : "Quizzes published by your instructor will appear here."}
                   </p>
                 </div>
@@ -2054,7 +2114,7 @@ export default function ClassroomHub() {
         classroomName={classroom.name}
       />
 
-      {/* Create Quiz Modal (Teacher) */}
+      {/* Create Quiz Modal (Teacher & Approved Student) */}
       <CreateQuizModal
         isOpen={isCreateQuizOpen}
         onClose={() => setIsCreateQuizOpen(false)}
@@ -2062,10 +2122,38 @@ export default function ClassroomHub() {
         gradeLevel={classroom.gradeLevel}
         textbooks={classroom.textbooks}
         bookIds={classroom.bookIds}
+        isStudent={!isTeacher}
+        onStartQuizImmediately={(createdQuiz) => {
+          fetchQuizzes();
+          setTakingQuiz(createdQuiz);
+          setQuizModalMode("TAKE");
+        }}
         onQuizCreated={() => {
           fetchQuizzes();
-          setSubmissionToast("Quiz published successfully.");
+          setSubmissionToast(
+            isTeacher
+              ? "Quiz published successfully."
+              : "Practice quiz created successfully."
+          );
           setTimeout(() => setSubmissionToast(null), 3000);
+        }}
+      />
+
+      {/* Student Request Quiz Access Modal */}
+      <RequestQuizAccessModal
+        isOpen={isRequestQuizOpen}
+        onClose={() => setIsRequestQuizOpen(false)}
+        classroomId={classroom.id}
+        classroomName={classroom.name}
+        user={currentUser}
+        onRequestSubmitted={() => {
+          fetchStudentQuizStatus();
+          setSubmissionToast(
+            language === "bn"
+              ? "কুইজ তৈরির আবেদন পাঠানো হয়েছে।"
+              : "Quiz generation request submitted to administrator."
+          );
+          setTimeout(() => setSubmissionToast(null), 3500);
         }}
       />
 

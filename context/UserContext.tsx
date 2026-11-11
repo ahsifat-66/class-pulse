@@ -24,6 +24,7 @@ export interface User {
   institution?: string | null;
   grade?: string | null;
   bio?: string | null;
+  canGenerateQuiz?: boolean;
   createdAt?: string;
 }
 

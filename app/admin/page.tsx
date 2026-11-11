@@ -30,6 +30,12 @@ import {
   Trash2,
   Clock,
   Inbox,
+  Sparkles,
+  Power,
+  UserCheck,
+  UserX,
+  HelpCircle,
+  Send,
 } from "lucide-react";
 
 interface AdminUser {
@@ -92,6 +98,34 @@ interface FeedbackStats {
   generalCount: number;
 }
 
+interface AdminQuizRequest {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  uniqueId: string;
+  userRole: string;
+  avatar?: string | null;
+  classroomId?: string | null;
+  classroomName?: string | null;
+  message: string;
+  status: "PENDING" | "APPROVED" | "REJECTED" | "REVOKED";
+  adminNote?: string | null;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface AdminQuizRequestStats {
+  total: number;
+  pendingCount: number;
+  approvedCount: number;
+  rejectedCount: number;
+  revokedCount: number;
+  globalFeatureEnabled: boolean;
+}
+
 export default function AdminDashboardPage() {
   const router = useRouter();
   const {
@@ -103,7 +137,9 @@ export default function AdminDashboardPage() {
     refreshUser,
   } = useUser();
 
-  const [activeAdminTab, setActiveAdminTab] = useState<"overview" | "users" | "classes" | "feedback">("overview");
+  const [activeAdminTab, setActiveAdminTab] = useState<
+    "overview" | "users" | "classes" | "feedback" | "quiz-requests"
+  >("overview");
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [classrooms, setClassrooms] = useState<AdminClassroom[]>([]);
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -112,6 +148,15 @@ export default function AdminDashboardPage() {
   const [unreadFeedbackCount, setUnreadFeedbackCount] = useState<number>(0);
   const [isSyncingFeedbacks, setIsSyncingFeedbacks] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Student quiz requests state
+  const [quizRequests, setQuizRequests] = useState<AdminQuizRequest[]>([]);
+  const [quizStats, setQuizStats] = useState<AdminQuizRequestStats | null>(null);
+  const [quizSearch, setQuizSearch] = useState("");
+  const [quizStatusFilter, setQuizStatusFilter] = useState<string>("all");
+  const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
+  const [deletingRequestId, setDeletingRequestId] = useState<string | null>(null);
+  const [isTogglingGlobalFeature, setIsTogglingGlobalFeature] = useState(false);
 
   // User tab search & filter
   const [searchQuery, setSearchQuery] = useState("");
@@ -166,12 +211,28 @@ export default function AdminDashboardPage() {
     }
   }, []);
 
+  const syncQuizRequests = useCallback(async (silent = false) => {
+    try {
+      const res = await fetch("/api/admin/quiz-requests", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setQuizRequests(data.requests || []);
+        if (data.stats) {
+          setQuizStats(data.stats);
+        }
+      }
+    } catch (err) {
+      console.error("Error syncing quiz requests:", err);
+    }
+  }, []);
+
   const fetchAdminData = useCallback(async () => {
     try {
       setIsLoading(true);
-      const [usersRes, feedbacksRes] = await Promise.all([
+      const [usersRes, feedbacksRes, quizRes] = await Promise.all([
         fetch("/api/admin/users", { cache: "no-store" }),
         fetch("/api/admin/feedbacks", { cache: "no-store" }),
+        fetch("/api/admin/quiz-requests", { cache: "no-store" }),
       ]);
 
       if (usersRes.ok) {
@@ -194,6 +255,12 @@ export default function AdminDashboardPage() {
         const newCount = items.filter((f: AdminFeedback) => f.status === "new").length;
         setUnreadFeedbackCount(newCount);
       }
+
+      if (quizRes.ok) {
+        const qData = await quizRes.json();
+        setQuizRequests(qData.requests || []);
+        if (qData.stats) setQuizStats(qData.stats);
+      }
     } catch (err: any) {
       console.error("Failed to load admin data:", err);
       setStatusMessage({
@@ -204,6 +271,114 @@ export default function AdminDashboardPage() {
       setIsLoading(false);
     }
   }, []);
+
+  const handleUpdateQuizRequest = async (
+    id: string,
+    action: "approve" | "reject" | "revoke",
+    adminNote?: string
+  ) => {
+    try {
+      setUpdatingRequestId(id);
+      setStatusMessage(null);
+
+      const res = await fetch("/api/admin/quiz-requests", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action, adminNote }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to update request.");
+      }
+
+      setQuizRequests(data.requests || []);
+      if (data.stats) setQuizStats(data.stats);
+
+      setStatusMessage({
+        type: "success",
+        text: data.message || "Quiz request updated successfully.",
+      });
+      fetchAdminData();
+    } catch (err: any) {
+      setStatusMessage({
+        type: "error",
+        text: err.message || "Error updating request.",
+      });
+    } finally {
+      setUpdatingRequestId(null);
+    }
+  };
+
+  const handleToggleGlobalQuizFeature = async () => {
+    const currentEnabled = quizStats?.globalFeatureEnabled ?? true;
+    const targetState = !currentEnabled;
+    const confirmMsg = targetState
+      ? "Are you sure you want to turn ON student quiz generation globally?"
+      : "Are you sure you want to turn OFF student quiz generation globally? Students will no longer be able to generate or request quizzes.";
+
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      setIsTogglingGlobalFeature(true);
+      setStatusMessage(null);
+
+      const res = await fetch("/api/admin/quiz-requests", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "toggle_global_feature",
+          enabled: targetState,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to toggle global feature.");
+      }
+
+      if (data.stats) setQuizStats(data.stats);
+      setStatusMessage({
+        type: "success",
+        text: data.message || "System setting updated successfully.",
+      });
+    } catch (err: any) {
+      setStatusMessage({
+        type: "error",
+        text: err.message || "Error updating system setting.",
+      });
+    } finally {
+      setIsTogglingGlobalFeature(false);
+    }
+  };
+
+  const handleDeleteQuizRequest = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this request record?")) return;
+
+    try {
+      setDeletingRequestId(id);
+      const res = await fetch(`/api/admin/quiz-requests?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to delete request.");
+
+      setQuizRequests(data.requests || []);
+      if (data.stats) setQuizStats(data.stats);
+
+      setStatusMessage({
+        type: "success",
+        text: "Request record deleted successfully.",
+      });
+    } catch (err: any) {
+      setStatusMessage({
+        type: "error",
+        text: err.message || "Failed to delete request.",
+      });
+    } finally {
+      setDeletingRequestId(null);
+    }
+  };
 
   useEffect(() => {
     if (!userLoading) {
@@ -505,6 +680,26 @@ export default function AdminDashboardPage() {
     return true;
   });
 
+  // Filtered quiz requests
+  const filteredQuizRequests = quizRequests.filter((r) => {
+    const q = quizSearch.toLowerCase().trim();
+    if (q) {
+      const matchText =
+        r.userName.toLowerCase().includes(q) ||
+        r.userEmail.toLowerCase().includes(q) ||
+        r.uniqueId.toLowerCase().includes(q) ||
+        (r.classroomName && r.classroomName.toLowerCase().includes(q)) ||
+        r.message.toLowerCase().includes(q);
+      if (!matchText) return false;
+    }
+
+    if (quizStatusFilter !== "all" && r.status !== quizStatusFilter) {
+      return false;
+    }
+
+    return true;
+  });
+
   // Access Denied Screen for unauthorized users
   if (!userLoading && (!currentUser || !hasAdminAccess)) {
     return (
@@ -574,6 +769,8 @@ export default function AdminDashboardPage() {
                       ? "User Directory"
                       : activeAdminTab === "classes"
                       ? "Classrooms"
+                      : activeAdminTab === "quiz-requests"
+                      ? "Quiz Permissions"
                       : "User Feedbacks"}
                   </span>
                 </>
@@ -787,6 +984,55 @@ export default function AdminDashboardPage() {
                 </div>
                 <div className="flex items-center gap-1 text-slate-400 group-hover:text-teal-600 dark:group-hover:text-teal-400 transition-colors">
                   <span className="hidden sm:inline text-xs font-bold">Open Inbox</span>
+                  <ChevronRight size={20} className="transform group-hover:translate-x-1 transition-transform" />
+                </div>
+              </div>
+
+              {/* Card 4: Student Quiz Permissions & Requests */}
+              <div
+                onClick={() => setActiveAdminTab("quiz-requests")}
+                className="p-4 sm:p-5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-sm flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/80 active:scale-[0.99] transition-all cursor-pointer group"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="relative w-11 h-11 rounded-xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 shadow-sm">
+                    <Sparkles size={22} strokeWidth={2} />
+                    {(quizStats?.pendingCount || 0) > 0 && (
+                      <span className="absolute -top-1 -right-1 flex h-4 w-4">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-4 w-4 bg-amber-500 text-white text-[9px] font-extrabold items-center justify-center">
+                          {quizStats?.pendingCount}
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm sm:text-base font-bold text-slate-800 dark:text-slate-100 group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors">
+                        Student Quiz Permissions
+                      </h3>
+                      {(quizStats?.pendingCount || 0) > 0 ? (
+                        <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                          {quizStats?.pendingCount} Pending
+                        </span>
+                      ) : (
+                        <span
+                          className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full border ${
+                            quizStats?.globalFeatureEnabled ?? true
+                              ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
+                              : "bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800"
+                          }`}
+                        >
+                          {quizStats?.globalFeatureEnabled ?? true ? "Feature Active" : "Turned OFF"}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      Review applications, grant quiz generation access & manage student testing controls ({quizStats?.total || quizRequests.length} total)
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 text-slate-400 group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors">
+                  <span className="hidden sm:inline text-xs font-bold">Manage Permissions</span>
                   <ChevronRight size={20} className="transform group-hover:translate-x-1 transition-transform" />
                 </div>
               </div>
@@ -1466,6 +1712,366 @@ export default function AdminDashboardPage() {
                   })
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 5: DEDICATED STUDENT QUIZ PERMISSIONS & REQUESTS */}
+        {activeAdminTab === "quiz-requests" && (
+          <div className="space-y-6 animate-in fade-in duration-150">
+            {/* Back Button Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200/80 dark:border-slate-800 pb-5">
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveAdminTab("overview")}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-purple-600 transition-colors"
+                >
+                  <ArrowLeft size={14} />
+                  <span>Back to Admin Console</span>
+                </button>
+                <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2.5">
+                  <Sparkles className="text-purple-600 dark:text-purple-400" size={24} />
+                  <span>Student Quiz Permissions & Requests</span>
+                </h2>
+                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+                  Manage student practice quiz generation access, approve applications, or turn off permissions.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => syncQuizRequests(false)}
+                  disabled={isLoading}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 shadow-sm transition-all active:scale-95 disabled:opacity-50"
+                >
+                  <RefreshCw size={14} className={isLoading ? "animate-spin" : ""} />
+                  <span>Sync Requests</span>
+                </button>
+              </div>
+            </div>
+
+            {/* MASTER SYSTEM TOGGLE CARD */}
+            <div className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-6 text-white shadow-xl relative overflow-hidden">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1.5 max-w-xl">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider bg-white/10 border border-white/20">
+                    <Power size={13} className={quizStats?.globalFeatureEnabled ?? true ? "text-emerald-400" : "text-rose-400"} />
+                    <span>Global Feature Control</span>
+                  </div>
+                  <h3 className="text-lg font-bold">
+                    Student Quiz Generation Master Switch
+                  </h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Turn off the student quiz generation capability completely across the entire platform. When turned off, students cannot request or generate quizzes.
+                  </p>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 shrink-0">
+                  <div className="text-left sm:text-right">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                      Platform Status
+                    </span>
+                    <span
+                      className={`text-sm font-extrabold flex items-center gap-1.5 ${
+                        quizStats?.globalFeatureEnabled ?? true ? "text-emerald-400" : "text-rose-400"
+                      }`}
+                    >
+                      <span className={`w-2.5 h-2.5 rounded-full ${quizStats?.globalFeatureEnabled ?? true ? "bg-emerald-400 animate-pulse" : "bg-rose-400"}`} />
+                      <span>{quizStats?.globalFeatureEnabled ?? true ? "Active & Enabled" : "Turned OFF Globally"}</span>
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleToggleGlobalQuizFeature}
+                    disabled={isTogglingGlobalFeature}
+                    className={`inline-flex items-center gap-2 px-5 py-3 rounded-2xl text-xs font-extrabold uppercase tracking-wider shadow-lg transition-all active:scale-95 disabled:opacity-50 ${
+                      quizStats?.globalFeatureEnabled ?? true
+                        ? "bg-rose-500 hover:bg-rose-600 text-white shadow-rose-500/25"
+                        : "bg-emerald-500 hover:bg-emerald-600 text-white shadow-emerald-500/25"
+                    }`}
+                  >
+                    {isTogglingGlobalFeature ? (
+                      <RefreshCw size={15} className="animate-spin" />
+                    ) : (
+                      <Power size={15} />
+                    )}
+                    <span>
+                      {quizStats?.globalFeatureEnabled ?? true
+                        ? "Turn OFF Globally"
+                        : "Turn ON Globally"}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Metrics Breakdown Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+              <div className="p-4 sm:p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm space-y-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Total Requests
+                </span>
+                <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white block">
+                  {quizStats?.total ?? quizRequests.length}
+                </span>
+              </div>
+
+              <div className="p-4 sm:p-5 rounded-2xl border border-amber-200/80 dark:border-amber-900/60 bg-amber-50/50 dark:bg-amber-950/20 shadow-sm space-y-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400 block">
+                  Pending Review
+                </span>
+                <span className="text-2xl sm:text-3xl font-black text-amber-900 dark:text-amber-200 block">
+                  {quizStats?.pendingCount ?? quizRequests.filter((r) => r.status === "PENDING").length}
+                </span>
+              </div>
+
+              <div className="p-4 sm:p-5 rounded-2xl border border-emerald-200/80 dark:border-emerald-900/60 bg-emerald-50/50 dark:bg-emerald-950/20 shadow-sm space-y-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 block">
+                  Approved Students
+                </span>
+                <span className="text-2xl sm:text-3xl font-black text-emerald-900 dark:text-emerald-200 block">
+                  {quizStats?.approvedCount ?? quizRequests.filter((r) => r.status === "APPROVED").length}
+                </span>
+              </div>
+
+              <div className="p-4 sm:p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm space-y-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Rejected / Revoked
+                </span>
+                <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white block">
+                  {(quizStats?.rejectedCount || 0) + (quizStats?.revokedCount || 0)}
+                </span>
+              </div>
+            </div>
+
+            {/* Filter Pills & Search */}
+            <div className="p-4 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm space-y-3">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <div className="relative flex-1">
+                  <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={quizSearch}
+                    onChange={(e) => setQuizSearch(e.target.value)}
+                    placeholder="Search by student name, email, student ID, or class..."
+                    className="w-full pl-10 pr-4 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:bg-white dark:focus:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500/20"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1.5 overflow-x-auto font-bold shrink-0">
+                  {[
+                    { id: "all", label: "All Requests" },
+                    { id: "PENDING", label: `Pending (${quizStats?.pendingCount || 0})` },
+                    { id: "APPROVED", label: "Approved" },
+                    { id: "REJECTED", label: "Rejected" },
+                    { id: "REVOKED", label: "Turned OFF" },
+                  ].map((filter) => (
+                    <button
+                      key={filter.id}
+                      type="button"
+                      onClick={() => setQuizStatusFilter(filter.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs transition-all whitespace-nowrap border ${
+                        quizStatusFilter === filter.id
+                          ? "border-purple-500 bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 font-extrabold"
+                          : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-750"
+                      }`}
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Requests List */}
+            <div className="space-y-3">
+              {filteredQuizRequests.length === 0 ? (
+                <div className="p-12 text-center rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm space-y-3">
+                  <div className="w-12 h-12 rounded-2xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 mx-auto flex items-center justify-center">
+                    <Sparkles size={24} />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-800 dark:text-slate-200">
+                    No Quiz Requests Found
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+                    {quizSearch || quizStatusFilter !== "all"
+                      ? "No applications matched your search or status filter."
+                      : "When students request permission to generate practice quizzes, their applications will appear here for review."}
+                  </p>
+                </div>
+              ) : (
+                filteredQuizRequests.map((req) => {
+                  const isUpdating = updatingRequestId === req.id;
+                  const isDeleting = deletingRequestId === req.id;
+
+                  return (
+                    <div
+                      key={req.id}
+                      className="p-5 sm:p-6 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm space-y-4 hover:border-purple-200 dark:hover:border-purple-900/40 transition-all"
+                    >
+                      {/* Top Header Row */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white font-bold flex items-center justify-center text-sm shadow-md shadow-purple-600/20 shrink-0">
+                            {req.userName.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                                {req.userName}
+                              </h4>
+                              <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                                {req.uniqueId || "N/A"}
+                              </span>
+                              {req.classroomName && (
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800">
+                                  Class: {req.classroomName}
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+                              {req.userEmail}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Status Badge */}
+                        <div className="flex items-center gap-2 self-start sm:self-auto">
+                          <span
+                            className={`text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full border ${
+                              req.status === "PENDING"
+                                ? "bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800"
+                                : req.status === "APPROVED"
+                                ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
+                                : req.status === "REVOKED"
+                                ? "bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800"
+                                : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                            }`}
+                          >
+                            {req.status === "PENDING"
+                              ? "Pending Review"
+                              : req.status === "APPROVED"
+                              ? "Approved • Active"
+                              : req.status === "REVOKED"
+                              ? "Turned OFF / Revoked"
+                              : "Rejected"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Message Content */}
+                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 space-y-1.5 text-xs">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                          Student Application Message:
+                        </span>
+                        <p className="text-slate-800 dark:text-slate-200 italic leading-relaxed whitespace-pre-wrap">
+                          "{req.message}"
+                        </p>
+                        {req.adminNote && (
+                          <div className="pt-2 mt-2 border-t border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400">
+                            <span className="font-bold block text-[10px] uppercase text-rose-600 dark:text-rose-400">
+                              Admin Note:
+                            </span>
+                            <span>{req.adminNote}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Footer Actions Row */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 border-t border-slate-100 dark:border-slate-800/80 text-xs">
+                        <div className="flex items-center gap-2 text-slate-400">
+                          <Clock size={13} />
+                          <span>Submitted: {new Date(req.createdAt).toLocaleDateString()}</span>
+                          {req.reviewedBy && (
+                            <span>• Reviewed by {req.reviewedBy}</span>
+                          )}
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {req.status === "PENDING" && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={isUpdating}
+                                onClick={() => handleUpdateQuizRequest(req.id, "approve")}
+                                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition-all active:scale-95 disabled:opacity-50"
+                              >
+                                {isUpdating ? (
+                                  <RefreshCw size={12} className="animate-spin" />
+                                ) : (
+                                  <Check size={13} strokeWidth={3} />
+                                )}
+                                <span>Approve Permission</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={isUpdating}
+                                onClick={() => {
+                                  const note = window.prompt("Optional rejection note for student:");
+                                  if (note !== null) {
+                                    handleUpdateQuizRequest(req.id, "reject", note);
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 font-bold text-xs hover:bg-rose-100 transition-colors disabled:opacity-50"
+                              >
+                                <span>Reject</span>
+                              </button>
+                            </>
+                          )}
+
+                          {req.status === "APPROVED" && (
+                            <button
+                              type="button"
+                              disabled={isUpdating}
+                              onClick={() => {
+                                if (window.confirm(`Are you sure you want to turn OFF quiz generation access for ${req.userName}?`)) {
+                                  handleUpdateQuizRequest(req.id, "revoke");
+                                }
+                              }}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-bold text-xs transition-colors disabled:opacity-50"
+                              title="Turn OFF access for this student"
+                            >
+                              {isUpdating ? (
+                                <RefreshCw size={12} className="animate-spin" />
+                              ) : (
+                                <UserX size={13} />
+                              )}
+                              <span>Turn OFF Access</span>
+                            </button>
+                          )}
+
+                          {(req.status === "REJECTED" || req.status === "REVOKED") && (
+                            <button
+                              type="button"
+                              disabled={isUpdating}
+                              onClick={() => handleUpdateQuizRequest(req.id, "approve")}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold text-xs hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                            >
+                              <UserCheck size={13} />
+                              <span>Re-Approve Access</span>
+                            </button>
+                          )}
+
+                          {/* Delete Request */}
+                          <button
+                            type="button"
+                            disabled={isDeleting}
+                            onClick={() => handleDeleteQuizRequest(req.id)}
+                            className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            title="Delete Request Record"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         )}

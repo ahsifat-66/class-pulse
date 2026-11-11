@@ -39,10 +39,12 @@ interface CreateQuizModalProps {
   gradeLevel?: string | null;
   textbooks?: Array<{ id: string; title: string; subject: string; driveUrl?: string | null }>;
   bookIds?: string[];
+  isStudent?: boolean;
   onQuizCreated: () => void;
+  onStartQuizImmediately?: (createdQuiz: any) => void;
 }
 
-type QuizMode = "ai" | "manual";
+type QuizMode = "ai" | "manual" | "student-ready";
 type DifficultyLevel = "Easy" | "Medium" | "Hard";
 
 export default function CreateQuizModal({
@@ -52,7 +54,9 @@ export default function CreateQuizModal({
   gradeLevel,
   textbooks = [],
   bookIds = [],
+  isStudent = false,
   onQuizCreated,
+  onStartQuizImmediately,
 }: CreateQuizModalProps) {
   const { t, language } = useLanguage();
 
@@ -306,13 +310,22 @@ export default function CreateQuizModal({
           setTitle(defaultTitle);
         }
 
-        // Set success feedback and switch to review mode
-        setAiSuccessMsg(
-          language === "bn"
-            ? `জেমিনি এআই সফলভাবে ${generated.length}টি প্রশ্ন তৈরি করেছে! নিচে প্রশ্নগুলো পর্যালোচনা ও সম্পাদন করুন।`
-            : `Successfully generated ${generated.length} MCQs! Review and edit below.`
-        );
-        setActiveMode("manual");
+        // Set success feedback and switch mode
+        if (isStudent) {
+          setAiSuccessMsg(
+            language === "bn"
+              ? `জেমিনি এআই সফলভাবে ${generated.length}টি প্রশ্ন তৈরি করেছে! আপনার পরীক্ষা শুরু করার জন্য প্রস্তুত।`
+              : `Successfully generated ${generated.length} MCQs! Ready to start.`
+          );
+          setActiveMode("student-ready");
+        } else {
+          setAiSuccessMsg(
+            language === "bn"
+              ? `জেমিনি এআই সফলভাবে ${generated.length}টি প্রশ্ন তৈরি করেছে! নিচে প্রশ্নগুলো পর্যালোচনা ও সম্পাদন করুন।`
+              : `Successfully generated ${generated.length} MCQs! Review and edit below.`
+          );
+          setActiveMode("manual");
+        }
       } else {
         throw new Error("No questions were returned from AI.");
       }
@@ -321,6 +334,56 @@ export default function CreateQuizModal({
       setAiError(err.message || "Failed to generate quiz from textbook.");
     } finally {
       setIsGeneratingAi(false);
+    }
+  };
+
+  const handleStartStudentQuiz = async () => {
+    try {
+      setIsSubmitting(true);
+      setError("");
+
+      const quizTitle =
+        title.trim() ||
+        (language === "bn"
+          ? `${selectedBook?.title || "অনুশীলনী কুইজ"}: ${aiChapter.trim() || "অধ্যায়"}`
+          : `${selectedBook?.title || "Practice Quiz"}: ${aiChapter.trim() || "Chapter"}`);
+
+      const res = await fetch(`/api/classrooms/${classroomId}/quizzes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: quizTitle,
+          description:
+            description.trim() ||
+            (language === "bn"
+              ? `শিক্ষার্থী কর্তৃক স্ব-মূল্যায়নের জন্য প্রস্তুতকৃত কুইজ (${aiChapter})`
+              : `Student self-assessment quiz on ${aiChapter}`),
+          timeLimitMinutes: Number(timeLimitMinutes) || 15,
+          questions: questions.map((q) => ({
+            question: q.question,
+            options: q.options,
+            correctOptionIndex: q.correctOptionIndex,
+            points: Number(q.points) || 1,
+            explanation: (q.explanation || (q as any).rationale || (q as any).reasoning || (q as any).feedback || (q as any).solution || (q as any).details)?.trim() || undefined,
+            pageReference: q.pageReference?.trim() || undefined,
+          })),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to create practice quiz.");
+      }
+
+      onClose();
+      if (onStartQuizImmediately) {
+        onStartQuizImmediately(data.quiz);
+      }
+      onQuizCreated();
+    } catch (err: any) {
+      setError(err.message || "Failed to start quiz.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -409,13 +472,25 @@ export default function CreateQuizModal({
             </div>
             <div>
               <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <span>{language === "bn" ? "নতুন কুইজ তৈরি করুন" : "Create Classroom Quiz"}</span>
+                <span>
+                  {isStudent
+                    ? language === "bn"
+                      ? "অনুশীলনী কুইজ জেনারেটর"
+                      : "Practice Quiz Generator"
+                    : language === "bn"
+                    ? "নতুন কুইজ তৈরি করুন"
+                    : "Create Classroom Quiz"}
+                </span>
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300">
                   {gradeLevel || "Class 6"}
                 </span>
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                {language === "bn"
+                {isStudent
+                  ? language === "bn"
+                    ? "বোর্ড বই থেকে প্রশ্ন তৈরি করে সরাসরি পরীক্ষা দিন (প্রশ্নগুলো গোপন থাকবে)"
+                    : "Generate curriculum MCQs from textbooks and test yourself directly"
+                  : language === "bn"
                   ? "অ্যাসাইনকৃত পাঠ্যবই থেকে জেমিনি এআই দিয়ে অথবা ম্যানুয়ালি প্রশ্ন তৈরি করুন"
                   : "Generate MCQs from assigned textbooks with Gemini AI or craft manually"}
               </p>
@@ -430,42 +505,75 @@ export default function CreateQuizModal({
           </button>
         </div>
 
-        {/* Method Switcher Tabs (AI vs Manual) */}
-        <div className="p-4 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 shrink-0">
-          <div className="grid grid-cols-2 gap-2 bg-slate-100 dark:bg-slate-800/80 p-1.5 rounded-2xl">
-            <button
-              type="button"
-              onClick={() => setActiveMode("ai")}
-              className={`flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all ${
-                activeMode === "ai"
-                  ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
-                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
-              }`}
-            >
-              <Sparkles size={16} className="text-purple-500 dark:text-purple-400" />
-              <span>{language === "bn" ? "এআই দিয়ে তৈরি করুন" : "Generate with AI"}</span>
-              <span className="hidden sm:inline-block text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300">
-                Gemini 1.5
-              </span>
-            </button>
+        {/* Method Switcher Tabs */}
+        {!isStudent ? (
+          <div className="p-4 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 shrink-0">
+            <div className="grid grid-cols-2 gap-2 bg-slate-100 dark:bg-slate-800/80 p-1.5 rounded-2xl">
+              <button
+                type="button"
+                onClick={() => setActiveMode("ai")}
+                className={`flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                  activeMode === "ai"
+                    ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                    : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+                }`}
+              >
+                <Sparkles size={16} className="text-purple-500 dark:text-purple-400" />
+                <span>{language === "bn" ? "এআই দিয়ে তৈরি করুন" : "Generate with AI"}</span>
+                <span className="hidden sm:inline-block text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300">
+                  Gemini 1.5
+                </span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveMode("manual")}
-              className={`flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all ${
-                activeMode === "manual"
-                  ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
-                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
-              }`}
-            >
-              <Pencil size={15} />
-              <span>{language === "bn" ? "ম্যানুয়ালি তৈরি করুন" : "Create Manually"}</span>
-              <span className="hidden sm:inline-block text-[10px] font-mono opacity-60">
-                ({questions.length})
-              </span>
-            </button>
+              <button
+                type="button"
+                onClick={() => setActiveMode("manual")}
+                className={`flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                  activeMode === "manual"
+                    ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                    : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+                }`}
+              >
+                <Pencil size={15} />
+                <span>{language === "bn" ? "ম্যানুয়ালি তৈরি করুন" : "Create Manually"}</span>
+                <span className="hidden sm:inline-block text-[10px] font-mono opacity-60">
+                  ({questions.length})
+                </span>
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="p-3 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 shrink-0">
+            <div className="grid grid-cols-2 gap-2 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setActiveMode("ai")}
+                className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all ${
+                  activeMode === "ai"
+                    ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                    : "text-slate-500"
+                }`}
+              >
+                <Sparkles size={14} className="text-purple-500" />
+                <span>{language === "bn" ? "১. অধ্যায় ও প্রশ্ন কনফিগার" : "1. Topic & Config"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => questions.length > 0 && setActiveMode("student-ready")}
+                disabled={activeMode !== "student-ready"}
+                className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all ${
+                  activeMode === "student-ready"
+                    ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                    : "text-slate-400 disabled:opacity-50"
+                }`}
+              >
+                <CheckCircle2 size={14} className="text-emerald-500" />
+                <span>{language === "bn" ? "২. পরীক্ষা শুরু করুন" : "2. Ready to Start"}</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Content Body */}
         <div className="p-5 sm:p-6 overflow-y-auto flex-1 space-y-6">
@@ -720,7 +828,8 @@ export default function CreateQuizModal({
           )}
 
           {/* 2. "Create Manually" / Review & Publish Form */}
-          <form id="create-quiz-form" onSubmit={handleSubmit} className="space-y-5">
+          {!isStudent && (
+            <form id="create-quiz-form" onSubmit={handleSubmit} className="space-y-5">
             <div className="flex items-center justify-between pb-1 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2">
                 <FileCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
@@ -987,7 +1096,109 @@ export default function CreateQuizModal({
                 <span>{error}</span>
               </div>
             )}
-          </form>
+            </form>
+          )}
+
+          {/* 3. "Student Test Ready" View (Questions and answers are hidden!) */}
+          {isStudent && activeMode === "student-ready" && (
+            <div className="py-6 px-3 sm:px-6 text-center space-y-6 animate-in fade-in zoom-in-95 duration-200">
+              <div className="relative mx-auto w-20 h-20 rounded-3xl bg-gradient-to-tr from-emerald-500 to-teal-400 text-white flex items-center justify-center shadow-lg shadow-emerald-500/25">
+                <CheckCircle2 size={40} strokeWidth={2.2} />
+              </div>
+
+              <div className="space-y-2 max-w-md mx-auto">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                  <Sparkles size={13} />
+                  <span>{language === "bn" ? "কুইজ প্রস্তুত!" : "Quiz Ready for Testing!"}</span>
+                </div>
+                <h3 className="text-xl font-black text-slate-900 dark:text-white">
+                  {title || (language === "bn" ? `${selectedBook?.title}: ${aiChapter}` : `${selectedBook?.title}: ${aiChapter}`)}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                  {language === "bn"
+                    ? "পরীক্ষার সততা ও নিরপেক্ষ মূল্যায়নের জন্য প্রশ্ন এবং সঠিক উত্তরগুলো গোপন রাখা হয়েছে। 'পরীক্ষা শুরু করুন' বাটনে ক্লিক করলে সময় গণনা শুরু হবে।"
+                    : "To ensure an authentic, unbiased assessment, questions and correct answers remain hidden. Clicking 'Start Quiz' will begin your timed test."}
+                </p>
+              </div>
+
+              {/* Metric Overview Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-lg mx-auto text-left">
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                    {language === "bn" ? "মোট প্রশ্ন" : "Questions"}
+                  </span>
+                  <span className="text-base font-black text-slate-900 dark:text-white block mt-0.5">
+                    {questions.length} MCQs
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                    {language === "bn" ? "সময়সীমা" : "Time Limit"}
+                  </span>
+                  <span className="text-base font-black text-slate-900 dark:text-white block mt-0.5">
+                    {timeLimitMinutes || 15} Mins
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                    {language === "bn" ? "কঠিনতার স্তর" : "Difficulty"}
+                  </span>
+                  <span className="text-base font-black text-slate-900 dark:text-white block mt-0.5">
+                    {aiDifficulty}
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                    {language === "bn" ? "বিষয়" : "Subject"}
+                  </span>
+                  <span className="text-base font-black text-slate-900 dark:text-white block mt-0.5 truncate">
+                    {selectedBook?.subject || "General"}
+                  </span>
+                </div>
+              </div>
+
+              {error && (
+                <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/40 text-xs font-semibold text-rose-700 dark:text-rose-300 max-w-md mx-auto flex items-center gap-2">
+                  <AlertCircle size={16} className="shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {/* Big Start Quiz Button */}
+              <div className="pt-2 max-w-sm mx-auto space-y-3">
+                <button
+                  type="button"
+                  onClick={handleStartStudentQuiz}
+                  disabled={isSubmitting}
+                  className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-sm sm:text-base shadow-xl shadow-emerald-600/25 active:scale-95 transition-all flex items-center justify-center gap-2.5 disabled:opacity-50"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 size={18} className="animate-spin" />
+                      <span>{language === "bn" ? "পরীক্ষা শুরু হচ্ছে..." : "Starting Quiz..."}</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 size={18} />
+                      <span>{language === "bn" ? "পরীক্ষা শুরু করুন (Start Quiz)" : "Start Quiz Now"}</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveMode("ai")}
+                  disabled={isSubmitting}
+                  className="text-xs font-bold text-slate-500 hover:text-indigo-600 transition-colors"
+                >
+                  {language === "bn" ? "← নতুন প্রশ্ন তৈরি করতে অপশন পরিবর্তন করুন" : "← Change options & regenerate"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Modal Footer */}
@@ -1001,26 +1212,49 @@ export default function CreateQuizModal({
             {t("cancel", "Cancel")}
           </button>
           <div className="flex items-center gap-2">
-            <button
-              type="submit"
-              form="create-quiz-form"
-              disabled={isSubmitting}
-              className="inline-flex items-center gap-2 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 text-xs sm:text-sm font-bold shadow-md shadow-indigo-200 dark:shadow-none transition-all active:scale-95 disabled:opacity-50 min-h-[44px]"
-            >
-              {isSubmitting ? (
-                <>
-                  <Loader2 size={16} className="animate-spin" />
-                  <span>{language === "bn" ? "কুইজ প্রকাশ করা হচ্ছে..." : "Publishing Quiz..."}</span>
-                </>
-              ) : (
-                <>
-                  <Check size={16} />
-                  <span>
-                    {language === "bn" ? "কুইজ প্রকাশ করুন" : "Publish Quiz"}
-                  </span>
-                </>
-              )}
-            </button>
+            {isStudent ? (
+              activeMode === "student-ready" ? (
+                <button
+                  type="button"
+                  onClick={handleStartStudentQuiz}
+                  disabled={isSubmitting}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 text-xs sm:text-sm font-bold shadow-md shadow-emerald-200 dark:shadow-none transition-all active:scale-95 disabled:opacity-50 min-h-[44px]"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>{language === "bn" ? "পরীক্ষা শুরু হচ্ছে..." : "Starting..."}</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 size={16} />
+                      <span>{language === "bn" ? "পরীক্ষা শুরু করুন" : "Start Quiz"}</span>
+                    </>
+                  )}
+                </button>
+              ) : null
+            ) : (
+              <button
+                type="submit"
+                form="create-quiz-form"
+                disabled={isSubmitting}
+                className="inline-flex items-center gap-2 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 text-xs sm:text-sm font-bold shadow-md shadow-indigo-200 dark:shadow-none transition-all active:scale-95 disabled:opacity-50 min-h-[44px]"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>{language === "bn" ? "কুইজ প্রকাশ করা হচ্ছে..." : "Publishing Quiz..."}</span>
+                  </>
+                ) : (
+                  <>
+                    <Check size={16} />
+                    <span>
+                      {language === "bn" ? "কুইজ প্রকাশ করুন" : "Publish Quiz"}
+                    </span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </div>
       </div>

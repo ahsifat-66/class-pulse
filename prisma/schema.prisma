@@ -37,7 +37,9 @@ model User {
   notifications  Notification[]
   quizSubmissions QuizSubmission[]
   isVerified     Boolean           @default(false)
+  canGenerateQuiz Boolean          @default(false)
   emailOtps      EmailOtp[]
+  quizRequests   QuizAccessRequest[]
   createdAt      DateTime          @default(now())
 
   @@index([email])
@@ -246,6 +248,7 @@ model Quiz {
   description      String?
   timeLimitMinutes Int              @default(15)
   dueDate          DateTime?
+  creatorId        String?
   createdAt        DateTime         @default(now())
   questions        QuizQuestion[]
   submissions      QuizSubmission[]
@@ -313,6 +316,25 @@ model Feedback {
 
   @@index([status])
   @@index([category])
+  @@index([createdAt])
+}
+
+model QuizAccessRequest {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  classroomId   String?
+  classroomName String?
+  message       String    @db.Text
+  status        String    @default("PENDING") // "PENDING" | "APPROVED" | "REJECTED" | "REVOKED"
+  adminNote     String?
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([status])
   @@index([createdAt])
 }
 

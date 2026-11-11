@@ -143,9 +143,37 @@ export async function POST(
       return NextResponse.json({ error: "Classroom not found" }, { status: 404 });
     }
 
-    if (classroom.teacherId !== userId) {
+    const isTeacher = Boolean(classroom.teacherId === userId);
+    let isApprovedStudent = false;
+
+    if (!isTeacher) {
+      const { getGlobalQuizFeatureStatus } = await import("@/lib/quiz-requests/store");
+      const isGlobalEnabled = getGlobalQuizFeatureStatus();
+      if (isGlobalEnabled) {
+        const callerUser = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { id: true, canGenerateQuiz: true },
+        });
+        if (callerUser?.canGenerateQuiz) {
+          const membership = await prisma.classroomMember.findFirst({
+            where: { classroomId, userId },
+          });
+          const enrollment = await prisma.enrollment.findFirst({
+            where: { classroomId, userId },
+          });
+          if (membership || enrollment) {
+            isApprovedStudent = true;
+          }
+        }
+      }
+    }
+
+    if (!isTeacher && !isApprovedStudent) {
       return NextResponse.json(
-        { error: "Only the classroom instructor can create quizzes." },
+        {
+          error:
+            "Only the classroom instructor or approved students with quiz generation permission can create quizzes.",
+        },
         { status: 403 }
       );
     }
@@ -218,6 +246,7 @@ export async function POST(
         description: description?.trim() || null,
         timeLimitMinutes: Math.max(1, Number(timeLimitMinutes) || 15),
         dueDate: dueDate ? new Date(dueDate) : null,
+        creatorId: userId,
         questions: {
           create: validatedQuestions,
         },
@@ -228,15 +257,30 @@ export async function POST(
       },
     });
 
-    // Notify enrolled students
-    await notifyClassroomStudents({
-      classroomId,
-      title: `New Quiz: ${quiz.title}`,
-      message: `${quiz.timeLimitMinutes} min limit • ${quiz.questions.length} questions`,
-      link: `/classroom/${classroomId}?tab=quizzes`,
-    });
+    if (isTeacher) {
+      // Notify enrolled students when instructor publishes a quiz
+      await notifyClassroomStudents({
+        classroomId,
+        title: `New Quiz: ${quiz.title}`,
+        message: `${quiz.timeLimitMinutes} min limit • ${quiz.questions.length} questions`,
+        link: `/classroom/${classroomId}?tab=quizzes`,
+      });
+    }
 
-    return NextResponse.json({ quiz }, { status: 201 });
+    // If a student created this quiz to take as a practice test, sanitize the questions so answers aren't exposed in response payload
+    const safeQuiz = isTeacher
+      ? quiz
+      : {
+          ...quiz,
+          questions: quiz.questions.map((q) => ({
+            id: q.id,
+            question: q.question,
+            options: q.options,
+            points: q.points,
+          })),
+        };
+
+    return NextResponse.json({ quiz: safeQuiz }, { status: 201 });
   } catch (error) {
     console.error("Error creating quiz:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

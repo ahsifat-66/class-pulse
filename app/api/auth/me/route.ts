@@ -9,6 +9,7 @@ import {
   PERMANENT_SUPER_ADMIN_EMAIL,
   PERMANENT_SUPER_ADMIN_ID,
 } from "@/lib/auth/roles";
+import { getGlobalQuizFeatureStatus } from "@/lib/quiz-requests/store";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,7 @@ export async function GET(req: NextRequest) {
           institution: true,
           grade: true,
           bio: true,
+          canGenerateQuiz: true,
           createdAt: true,
         },
       });
@@ -121,10 +123,12 @@ export async function GET(req: NextRequest) {
         activeRole,
       };
 
+      const isGlobalEnabled = getGlobalQuizFeatureStatus();
       const userResponse = {
         ...user,
         role: effectiveRole,
         uniqueId: finalUniqueId,
+        canGenerateQuiz: isSuperAdminEmail || Boolean(user.canGenerateQuiz && isGlobalEnabled),
       };
 
       return NextResponse.json({ user: userResponse, summary }, { status: 200 });
