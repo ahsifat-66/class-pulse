@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
       bookTitle = "পাঠ্যবই",
       subject = "General",
       gradeLevel = "Class 6",
+      fastMode = false,
     } = body;
 
     if (!chapter || typeof chapter !== "string" || !chapter.trim()) {
@@ -47,9 +48,9 @@ export async function POST(req: NextRequest) {
       ? difficulty
       : "Medium";
 
-    // 1. Attempt to fetch PDF stream from Google Drive
+    // 1. Attempt to fetch PDF stream from Google Drive (skipped in fastMode for instant student quiz generation)
     let pdfBase64: string | null = null;
-    const fileId = extractGoogleDriveFileId(driveUrl);
+    const fileId = !fastMode ? extractGoogleDriveFileId(driveUrl) : null;
 
     if (fileId) {
       try {

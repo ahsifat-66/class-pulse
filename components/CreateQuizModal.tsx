@@ -268,6 +268,7 @@ export default function CreateQuizModal({
           bookTitle: selectedBook?.title || "বোর্ড বই",
           subject: selectedBook?.subject || "General",
           gradeLevel: gradeLevel || selectedBook?.grade || "Class 6",
+          fastMode: isStudent,
         }),
       });
 
@@ -776,6 +777,35 @@ export default function CreateQuizModal({
                           }`}
                         >
                           {num}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Time Limit in Minutes (Requested Spec: 5, 10, 15, 20, 30 min) */}
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <Clock size={13} className="text-emerald-600 dark:text-emerald-400" />
+                        <span>{language === "bn" ? "পরীক্ষার সময়সীমা (মিনিট)" : "Time Limit (Minutes)"}</span>
+                      </span>
+                      <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                        {timeLimitMinutes || 15} {language === "bn" ? "মিনিট" : "Mins"}
+                      </span>
+                    </label>
+                    <div className="grid grid-cols-5 gap-1.5 bg-white dark:bg-slate-800 p-1 rounded-2xl border border-slate-200 dark:border-slate-700">
+                      {[5, 10, 15, 20, 30].map((mins) => (
+                        <button
+                          key={mins}
+                          type="button"
+                          onClick={() => setTimeLimitMinutes(mins)}
+                          className={`py-2 text-center rounded-xl text-xs font-bold transition-all min-h-[36px] ${
+                            timeLimitMinutes === mins
+                              ? "bg-emerald-600 text-white shadow-sm"
+                              : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                          }`}
+                        >
+                          {mins}m
                         </button>
                       ))}
                     </div>

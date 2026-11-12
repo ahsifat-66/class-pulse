@@ -24,6 +24,7 @@ import EditClassModal from "@/components/EditClassModal";
 import AssignBooksModal from "@/components/AssignBooksModal";
 import PdfReaderModal from "@/components/PdfReaderModal";
 import RequestQuizAccessModal from "@/components/RequestQuizAccessModal";
+import StudentAiQuizGenerator from "@/components/StudentAiQuizGenerator";
 import { useLanguage } from "@/lib/i18n";
 import {
   ArrowLeft,
@@ -1251,6 +1252,24 @@ export default function ClassroomHub() {
                 </div>
               )}
             </div>
+
+            {/* Student AI Quiz Generator (State separation: not_requested -> pending -> approved) */}
+            {!isTeacher && (
+              <StudentAiQuizGenerator
+                classroomId={classroomId}
+                classroomName={classroom?.name}
+                gradeLevel={classroom?.gradeLevel || "Class 9-10"}
+                assignedTextbooks={classroom?.textbooks || []}
+                onQuizStarted={(quiz) => {
+                  setQuizModalMode("TAKE");
+                  setTakingQuiz(quiz);
+                }}
+                onQuizCreated={() => {
+                  fetchQuizzes();
+                }}
+                className="mb-2"
+              />
+            )}
 
             <div className="space-y-4">
               {quizzes.length === 0 ? (
